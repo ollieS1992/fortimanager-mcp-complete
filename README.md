@@ -4,6 +4,13 @@
 > Maintained for home-lab use against FortiManager 7.6.6 with workspace mode enabled.
 > Upstream documentation follows below — read the **Fork changes** section first if you're wondering what this fork adds.
 
+
+> **Note:** This repository is based on [rstierli/fortimanager-mcp](https://github.com/rstierli/fortimanager-mcp)
+> (MIT License). It includes modifications for HTTP-mode deployment behind a
+> reverse proxy, plus workspace-lock and install-scope bugfixes.
+
+
+
 ## Fork changes
 
 Two fixes layered on top of upstream `v1.2.1-beta`:
