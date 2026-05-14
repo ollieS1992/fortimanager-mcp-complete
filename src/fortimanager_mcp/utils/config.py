@@ -1,0 +1,290 @@
+"""Configuration management for FortiManager MCP server."""
+
+import logging
+import stat
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Compute project root (3 levels up from this file: utils -> fortimanager_mcp -> src -> project)
+_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE) if _ENV_FILE.exists() else None,
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
+    # FortiManager Connection
+    FORTIMANAGER_HOST: str = Field(
+        ...,
+        description="FortiManager hostname or IP address",
+    )
+
+    FORTIMANAGER_API_TOKEN: str | None = Field(
+        default=None,
+        description="FortiManager API token for authentication",
+    )
+
+    FORTIMANAGER_USERNAME: str | None = Field(
+        default=None,
+        description="FortiManager username (for session-based auth)",
+    )
+
+    FORTIMANAGER_PASSWORD: str | None = Field(
+        default=None,
+        description="FortiManager password (for session-based auth)",
+    )
+
+    FORTIMANAGER_VERIFY_SSL: bool = Field(
+        default=True,
+        description="Verify SSL certificates",
+    )
+
+    FORTIMANAGER_TIMEOUT: int = Field(
+        default=30,
+        ge=1,
+        le=300,
+        description="Request timeout in seconds",
+    )
+
+    FORTIMANAGER_MAX_RETRIES: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum number of retry attempts",
+    )
+
+    # Default ADOM
+    DEFAULT_ADOM: str = Field(
+        default="root",
+        description="Default ADOM for API operations when not specified",
+    )
+
+    # MCP Server Settings
+    MCP_SERVER_HOST: str = Field(
+        default="0.0.0.0",
+        description="MCP server bind address",
+    )
+
+    MCP_SERVER_PORT: int = Field(
+        default=8000,
+        ge=1,
+        le=65535,
+        description="MCP server port",
+    )
+
+    # MCP Server Mode
+    MCP_SERVER_MODE: Literal["http", "stdio", "auto"] = Field(
+        default="auto",
+        description="Server mode: 'http' for Docker/web, 'stdio' for Claude Desktop, 'auto' to detect",
+    )
+
+    # MCP HTTP Auth
+    MCP_AUTH_TOKEN: str | None = Field(
+        default=None,
+        description="Bearer token for HTTP auth. If set, all HTTP requests (except /health) must include Authorization: Bearer <token>",
+    )
+
+    # MCP Allowed Hosts (for reverse proxy / Docker deployments)
+
+    MCP_ALLOWED_HOSTS: list[str] = Field(
+        default_factory=list,
+        description="Additional allowed Host header values for DNS rebinding protection. "
+        "Comma-separated in env var. localhost/127.0.0.1 always allowed by SDK.",
+
+    )
+
+    MCP_ALLOWED_ORIGINS: list[str] = Field(
+        default_factory=list,
+        description="Additional allowed Origin header values for DNS rebinding protection. "
+        "Required when MCP clients (e.g. Microsoft Copilot Studio / Power Platform) "
+        "send an Origin header. localhost/127.0.0.1 always allowed by SDK.",
+    )
+
+    # Tool Loading Mode
+    FMG_TOOL_MODE: Literal["full", "dynamic"] = Field(
+        default="full",
+        description="Tool loading mode: 'full' loads all 101 tools, 'dynamic' loads meta-tools only (~90% context reduction)",
+    )
+
+    # Logging Configuration
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        default="INFO",
+        description="Logging level",
+    )
+
+    LOG_FILE: Path | None = Field(
+        default=None,
+        description="Log file path (if file logging enabled)",
+    )
+
+    LOG_FORMAT: str = Field(
+        default="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        description="Log message format",
+    )
+
+    # Output Security
+    FMG_ALLOWED_OUTPUT_DIRS: str | None = Field(
+        default=None,
+        description="Comma-separated list of allowed output directories. "
+        "No defaults — file output is disabled until explicitly configured. "
+        "Example: FMG_ALLOWED_OUTPUT_DIRS=~/Downloads",
+    )
+
+    # Script Safety
+    FMG_SCRIPT_SAFETY: Literal["strict", "disabled"] = Field(
+        default="strict",
+        description="Script content safety mode. 'strict' blocks dangerous CLI commands "
+        "(factory-reset, reboot, shutdown, format). 'disabled' allows all commands.",
+    )
+
+    # Policy Safety
+    FMG_POLICY_SAFETY: Literal["strict", "warn", "disabled"] = Field(
+        default="strict",
+        description="Policy permissiveness safety mode. 'strict' blocks overly permissive "
+        "policies (srcaddr=all + dstaddr=all + action=accept). 'warn' allows but returns "
+        "a warning. 'disabled' allows all policies.",
+    )
+
+    # Testing Configuration
+    TEST_ADOM: str = Field(
+        default="root",
+        description="ADOM to use for integration tests",
+    )
+
+    TEST_DEVICE: str | None = Field(
+        default=None,
+        description="Device name for device-specific tests",
+    )
+
+    TEST_SKIP_WRITE_TESTS: bool = Field(
+        default=False,
+        description="Skip write operations in tests",
+    )
+
+    @field_validator("FORTIMANAGER_HOST")
+    @classmethod
+    def validate_host(cls, v: str) -> str:
+        """Validate FortiManager host."""
+        if not v:
+            raise ValueError("FORTIMANAGER_HOST cannot be empty")
+        # Remove protocol if present
+        v = v.replace("https://", "").replace("http://", "")
+        # Remove trailing slash
+        v = v.rstrip("/")
+        return v
+
+    @field_validator("LOG_FILE")
+    @classmethod
+    def validate_log_file(cls, v: Path | None) -> Path | None:
+        """Ensure log directory exists."""
+        if v is not None:
+            v.parent.mkdir(parents=True, exist_ok=True)
+        return v
+
+    @property
+    def has_token_auth(self) -> bool:
+        """Check if API token authentication is configured."""
+        return self.FORTIMANAGER_API_TOKEN is not None
+
+    @property
+    def has_session_auth(self) -> bool:
+        """Check if session-based authentication is configured."""
+        return self.FORTIMANAGER_USERNAME is not None and self.FORTIMANAGER_PASSWORD is not None
+
+    @property
+    def base_url(self) -> str:
+        """Get FortiManager base URL."""
+        return f"https://{self.FORTIMANAGER_HOST}/jsonrpc"
+
+    def configure_logging(self) -> None:
+        """Configure application logging based on settings."""
+        # Set log level
+        log_level = getattr(logging, self.LOG_LEVEL)
+
+        # Configure root logger
+        logging.basicConfig(
+            level=log_level,
+            format=self.LOG_FORMAT,
+            handlers=self._get_log_handlers(),
+        )
+
+        # Set httpx logging to WARNING to reduce noise
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        # Set pyFMG logging based on our log level
+        logging.getLogger("pyFMG").setLevel(log_level)
+
+    def _get_log_handlers(self) -> list[logging.Handler]:
+        """Get configured log handlers."""
+        handlers: list[logging.Handler] = []
+
+        # Console handler (always enabled)
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(getattr(logging, self.LOG_LEVEL))
+        console_handler.setFormatter(logging.Formatter(self.LOG_FORMAT))
+        handlers.append(console_handler)
+
+        # File handler (if configured)
+        if self.LOG_FILE:
+            file_handler = logging.FileHandler(self.LOG_FILE)
+            file_handler.setLevel(getattr(logging, self.LOG_LEVEL))
+            file_handler.setFormatter(logging.Formatter(self.LOG_FORMAT))
+            handlers.append(file_handler)
+
+        return handlers
+
+
+def _check_env_file_permissions() -> None:
+    """Warn if .env files have overly permissive permissions."""
+    logger = logging.getLogger(__name__)
+    for env_file in _PROJECT_ROOT.glob(".env*"):
+        if env_file.is_file() and not env_file.name.endswith(".example"):
+            try:
+                file_stat = env_file.stat()
+                mode = file_stat.st_mode
+                # Warn if group or other can read
+                if mode & (stat.S_IRGRP | stat.S_IROTH):
+                    logger.warning(
+                        f"Security: {env_file.name} is readable by group/others "
+                        f"(mode {oct(mode & 0o777)}). Run: chmod 600 {env_file}"
+                    )
+            except OSError:
+                pass
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Get cached settings instance.
+
+    Returns:
+        Settings instance with configuration from environment
+
+    Raises:
+        ValidationError: If required settings are missing or invalid
+    """
+    _check_env_file_permissions()
+    return Settings()
+
+
+def get_default_adom() -> str:
+    """Get the default ADOM from environment or fallback to 'root'.
+
+    This function is safe to call even before full settings are available,
+    as it only reads the DEFAULT_ADOM environment variable.
+
+    Returns:
+        The default ADOM name
+    """
+    import os
+
+    return os.environ.get("DEFAULT_ADOM", "root")

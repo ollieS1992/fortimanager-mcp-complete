@@ -1,0 +1,23 @@
+services:
+  fortimanager-mcp:
+    build: .
+    container_name: fortimanager-mcp
+    env_file:
+      - .env
+    environment:
+      - FORTIMANAGER_HOST=${FORTIMANAGER_HOST}
+      - FORTIMANAGER_API_TOKEN=${FORTIMANAGER_API_TOKEN}
+      - FORTIMANAGER_VERIFY_SSL=${FORTIMANAGER_VERIFY_SSL:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MCP_SERVER_MODE=http
+      - MCP_SERVER_HOST=0.0.0.0
+      - MCP_SERVER_PORT=8000
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS}
+      - MCP_ALLOWED_ORIGINS=${MCP_ALLOWED_ORIGINS}
+      - FMG_TOOL_MODE=${FMG_TOOL_MODE}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./output:/app/output
+    restart: unless-stopped
